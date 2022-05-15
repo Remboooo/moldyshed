@@ -3,8 +3,8 @@ esphome:
 
 esp8266:
   board: d1_mini
-  platformio_options:
-  platform: espressif8266@2.3.2
+#  platformio_options:
+#  platform: espressif8266@2.3.2
 
 logger:
   level: debug
@@ -33,7 +33,7 @@ status_led:
 
 switch:
   - platform: template
-    name: "Schuur fan control enable"
+    name: "Fan control enable"
     id: enable_auto
     icon: mdi:fan-auto
     optimistic: true
@@ -48,6 +48,13 @@ switch:
       - lambda: |-
           ESP_LOGI("schuur", "disable auto fan control");
       - output.turn_off: led_auto
+  - platform: template
+    name: "Keep fan on at min speed"
+    id: fan_on_at_min
+    icon: mdi:fan-remove
+    optimistic: true
+    restore_state: true
+
 
 number:
   - platform: template
@@ -139,7 +146,7 @@ globals:
 
 sensor:
   - platform: wifi_signal
-    name: "WiFi RSSI"
+    name: "Schuur WiFi RSSI"
     id: wifi_rssi
     update_interval: 10s
   - platform: dht
@@ -241,13 +248,26 @@ sensor:
           switch.is_on: enable_auto
         then:
         - lambda: |-
+            auto fan_always_on = id(fan_on_at_min);
             auto rh_in = id(raw_in_rh);
             auto rh_couldbe = id(raw_out_rh_at_in_t);
+            if (isnan(rh_in) || isnan(rh_couldbe)) {
+                ESP_LOGD("schuur", "Input(s) NaN, skipping fan control");
+                return;
+            }
             int min_speed = id(fan_auto_min).state;
             int max_speed = id(fan_auto_max).state;
-            float rh_percent_for_max_speed = (float) id(fan_rh_speed_factor).state;
-            int desired_speed = round((rh_in - rh_couldbe) / rh_percent_for_max_speed * 100.0);
-            desired_speed = min(max_speed, max(0, desired_speed));
+            double rh_percent_for_max_speed = (double) id(fan_rh_speed_factor).state;
+            double speed_frac = (rh_in - rh_couldbe) / rh_percent_for_max_speed;
+            int desired_speed = round(min_speed + (max_speed - min_speed) * speed_frac);
+            if (desired_speed < min_speed) {
+                if (fan_always_on) {
+                    desired_speed = min_speed;
+                } else {
+                    desired_speed = 0;
+                }
+            }
+            desired_speed = min(max_speed, desired_speed);
             ESP_LOGD("schuur", "Auto fan speed to %d%%", desired_speed);
             auto call = (desired_speed > 0) ? id(the_fan).turn_on() : id(the_fan).turn_off();
             call.set_speed(desired_speed);
@@ -284,3 +304,5 @@ binary_sensor:
     id: fan_stall
     icon: "mdi:fan"
     name: "Schuur fan stall state"
+    filters:
+    - delayed_on_off: 1s
