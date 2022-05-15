@@ -1,0 +1,286 @@
+esphome:
+  name: schuurvocht
+
+esp8266:
+  board: d1_mini
+  platformio_options:
+  platform: espressif8266@2.3.2
+
+logger:
+  level: debug
+
+captive_portal:
+
+<<: !include secrets.yaml
+
+substitutions:
+  interval: "3s"  # the AM2302 will work with smaller intervals, but at <2s it will start to heat up and skew the results!
+  averaging: "4"  # HASS output: averages over n samples and sends every n samples
+  sensor_pin_outside: D7
+  sensor_pin_inside: D6
+  fan_pwm_pin: D2
+  fan_enable_pin: D3
+  fan_rpm_pin: D1
+  fan_rpm_divider: "2"
+  led_status_pin: D4
+  led_auto_pin: D5
+  led_fan_on_pin: D0
+
+status_led:
+  pin: 
+    number: $led_status_pin
+    inverted: true
+
+switch:
+  - platform: template
+    name: "Schuur fan control enable"
+    id: enable_auto
+    icon: mdi:fan-auto
+    optimistic: true
+    restore_state: true
+    on_turn_on:
+      then:
+      - lambda: |-
+          ESP_LOGI("schuur", "enable auto fan control");
+      - output.turn_on: led_auto
+    on_turn_off:
+      then:
+      - lambda: |-
+          ESP_LOGI("schuur", "disable auto fan control");
+      - output.turn_off: led_auto
+
+number:
+  - platform: template
+    name: "Max auto fan speed"
+    id: fan_auto_max
+    entity_category: config
+    icon: mdi:fan-plus
+    optimistic: true
+    min_value: 0
+    max_value: 100
+    restore_value: true
+    initial_value: 100
+    step: 1
+  - platform: template
+    name: "Min auto fan speed"
+    id: fan_auto_min
+    entity_category: config
+    icon: mdi:fan-minus
+    optimistic: true
+    min_value: 0
+    max_value: 100
+    restore_value: true
+    initial_value: 0
+    step: 1
+  - platform: template
+    name: "RH diff for max speed"
+    id: fan_rh_speed_factor
+    entity_category: config
+    icon: mdi:fan-chevron-up
+    optimistic: true
+    min_value: 0
+    max_value: 100
+    restore_value: true
+    initial_value: 30
+    step: 1
+
+fan:
+  - platform: speed
+    output: fan_pwm
+    name: "Schuur fan"
+    id: the_fan
+    on_speed_set:
+      sensor.template.publish:
+        id: fan_pwm_percent
+        state: !lambda return id(the_fan).speed;
+    on_turn_on:
+    - output.turn_on: led_fan_on
+    on_turn_off:
+    - output.turn_off: led_fan_on
+
+output:
+  - platform: esp8266_pwm
+    pin: 
+      number: $fan_pwm_pin
+      mode:
+        output: true
+        open_drain: true
+    frequency: 25000 Hz
+    id: fan_pwm
+    power_supply: fan_enable
+  - platform: gpio
+    pin: $led_auto_pin
+    id: led_auto
+  - platform: gpio
+    pin: $led_fan_on_pin
+    id: led_fan_on
+
+power_supply:
+  - pin: $fan_enable_pin
+    id: fan_enable
+    enable_time: 1s
+    keep_on_time: 0s
+
+globals:
+  - id: raw_in_t
+    type: double
+  - id: raw_in_rh
+    type: double
+  - id: raw_out_t
+    type: double
+  - id: raw_out_rh
+    type: double
+  - id: raw_in_m
+    type: double
+  - id: raw_out_m
+    type: double
+  - id: raw_out_rh_at_in_t
+    type: double
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi RSSI"
+    id: wifi_rssi
+    update_interval: 10s
+  - platform: dht
+    pin: $sensor_pin_outside
+    model: AM2302
+    temperature:
+      name: "Temp buiten"
+      id: out_t
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value:
+        then:
+        - lambda: id(raw_out_t) = x;
+    humidity:
+      name: "RH buiten"
+      id: out_rh
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value:
+        then:
+        - lambda: id(raw_out_rh) = x;
+    update_interval: $interval
+  - platform: dht
+    pin: $sensor_pin_inside
+    model: AM2302
+    temperature:
+      name: "Temp schuur"
+      id: in_t
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value:
+        then:
+        - lambda: id(raw_in_t) = x;
+    humidity:
+      name: "RH schuur"
+      id: in_rh
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value: 
+        then:
+        - lambda: id(raw_in_rh) = x;
+        - lambda: |-
+            auto t_i = id(raw_in_t);
+            auto rh_i = id(raw_in_rh);
+            auto m_i = 6.112 * exp((17.67*t_i)/(t_i+243.5))*rh_i*18.02 / ((273.15+t_i) * 100 * 0.08314);
+            
+            auto t_o = id(raw_out_t);
+            auto rh_o = id(raw_out_rh);
+            auto m_o = 6.112 * exp((17.67*t_o)/(t_o+243.5))*rh_o*18.02 / ((273.15+t_o) * 100 * 0.08314);
+            
+            auto rh_o_t_i = (m_o / ((t_i+273.15)/(t_o+273.15))) * exp(-(17.67*t_i)/(t_i+243.5))*(0.075487*t_i+20.6193);
+           
+            id(raw_in_m) = m_i;
+            id(raw_out_m) = m_o;
+            id(raw_out_rh_at_in_t) = rh_o_t_i;
+           
+            id(in_m).publish_state(m_i);
+            id(out_m).publish_state(m_o);
+            id(out_rh_at_in_t).publish_state(rh_o_t_i);
+    update_interval: $interval
+  - platform: template
+    name: "Vochtgehalte schuur"
+    icon: mdi:water
+    id: in_m
+    unit_of_measurement: "g/m³"
+    filters:
+    - median:
+        window_size: $averaging
+        send_every: $averaging
+  - platform: template
+    name: "Vochtgehalte buiten"
+    icon: mdi:water
+    id: out_m
+    unit_of_measurement: "g/m³"
+    filters:
+    - median:
+        window_size: $averaging
+        send_every: $averaging
+  - platform: template
+    name: "RH buiten bij schuurtemperatuur"
+    icon: mdi:water-percent
+    id: out_rh_at_in_t
+    unit_of_measurement: "%"
+    filters:
+    - median:
+        window_size: $averaging
+        send_every: $averaging
+    on_raw_value:
+      if:
+        condition:
+          switch.is_on: enable_auto
+        then:
+        - lambda: |-
+            auto rh_in = id(raw_in_rh);
+            auto rh_couldbe = id(raw_out_rh_at_in_t);
+            int min_speed = id(fan_auto_min).state;
+            int max_speed = id(fan_auto_max).state;
+            float rh_percent_for_max_speed = (float) id(fan_rh_speed_factor).state;
+            int desired_speed = round((rh_in - rh_couldbe) / rh_percent_for_max_speed * 100.0);
+            desired_speed = min(max_speed, max(0, desired_speed));
+            ESP_LOGD("schuur", "Auto fan speed to %d%%", desired_speed);
+            auto call = (desired_speed > 0) ? id(the_fan).turn_on() : id(the_fan).turn_off();
+            call.set_speed(desired_speed);
+            call.perform();
+  - platform: template
+    id: fan_pwm_percent
+    icon: "mdi:fan"
+    name: "Schuur fan %"
+    unit_of_measurement: "%"
+    filters:
+    - median:
+        window_size: $averaging
+        send_every: $averaging
+#  - platform: pulse_counter
+#    pin: 
+#      number: $fan_rpm_pin
+#      mode: INPUT_PULLUP
+#    id: fan_rpm
+#    icon: "mdi:fan"
+#    name: Schuur fan speed
+#    update_interval: $interval
+#    unit_of_measurement: "rpm"
+#    filters:
+#    - lambda: !lambda return x * 1.0/(float)$fan_rpm_divider;
+#    - median:
+#        window_size: $averaging
+#        send_every: $averaging
+
+binary_sensor:
+  - platform: gpio
+    pin: 
+      number: $fan_rpm_pin
+      inverted: true
+    id: fan_stall
+    icon: "mdi:fan"
+    name: "Schuur fan stall state"
