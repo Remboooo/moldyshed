@@ -248,7 +248,7 @@ sensor:
           switch.is_on: enable_auto
         then:
         - lambda: |-
-            auto fan_always_on = id(fan_on_at_min);
+            auto fan_always_on = id(fan_on_at_min).state;
             auto rh_in = id(raw_in_rh);
             auto rh_couldbe = id(raw_out_rh_at_in_t);
             if (isnan(rh_in) || isnan(rh_couldbe)) {
