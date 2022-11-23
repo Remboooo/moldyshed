@@ -1,5 +1,12 @@
 esphome:
   name: schuurvocht
+  on_boot:
+    - output.set_level: 
+        id: led_fan_on
+        level: .1
+    - output.set_level: 
+        id: led_auto
+        level: .1
 
 esp8266:
   board: d1_mini
@@ -15,12 +22,12 @@ captive_portal:
 
 substitutions:
   interval: "3s"  # the AM2302 will work with smaller intervals, but at <2s it will start to heat up and skew the results!
-  averaging: "4"  # HASS output: averages over n samples and sends every n samples
+  averaging: "4"  # HASS output and outside measurement smoothing: averages over n samples and computes/sends every n samples
   sensor_pin_outside: D7
   sensor_pin_inside: D6
   fan_pwm_pin: D2
   fan_enable_pin: D3
-  fan_rpm_pin: D1
+  fan_sense_pin: D1
   fan_rpm_divider: "2"
   led_status_pin: D4
   led_auto_pin: D5
@@ -99,7 +106,8 @@ fan:
     on_speed_set:
       sensor.template.publish:
         id: fan_pwm_percent
-        state: !lambda return id(the_fan).speed;
+        state: !lambda |-
+          return id(the_fan).state ? id(the_fan).speed : 0;
     on_turn_on:
     - output.turn_on: led_fan_on
     on_turn_off:
@@ -115,12 +123,14 @@ output:
     frequency: 25000 Hz
     id: fan_pwm
     power_supply: fan_enable
-  - platform: gpio
+  - platform: esp8266_pwm
     pin: $led_auto_pin
     id: led_auto
-  - platform: gpio
+    frequency: 100 Hz
+  - platform: esp8266_pwm
     pin: $led_fan_on_pin
     id: led_fan_on
+    frequency: 100 Hz
 
 power_supply:
   - pin: $fan_enable_pin
@@ -136,12 +146,6 @@ globals:
   - id: raw_out_t
     type: double
   - id: raw_out_rh
-    type: double
-  - id: raw_in_m
-    type: double
-  - id: raw_out_m
-    type: double
-  - id: raw_out_rh_at_in_t
     type: double
 
 sensor:
@@ -207,10 +211,6 @@ sensor:
             
             auto rh_o_t_i = (m_o / ((t_i+273.15)/(t_o+273.15))) * exp(-(17.67*t_i)/(t_i+243.5))*(0.075487*t_i+20.6193);
            
-            id(raw_in_m) = m_i;
-            id(raw_out_m) = m_o;
-            id(raw_out_rh_at_in_t) = rh_o_t_i;
-           
             id(in_m).publish_state(m_i);
             id(out_m).publish_state(m_o);
             id(out_rh_at_in_t).publish_state(rh_o_t_i);
@@ -242,7 +242,7 @@ sensor:
     - median:
         window_size: $averaging
         send_every: $averaging
-    on_raw_value:
+    on_value:
       if:
         condition:
           switch.is_on: enable_auto
@@ -250,7 +250,7 @@ sensor:
         - lambda: |-
             auto fan_always_on = id(fan_on_at_min).state;
             auto rh_in = id(raw_in_rh);
-            auto rh_couldbe = id(raw_out_rh_at_in_t);
+            auto rh_couldbe = x;
             if (isnan(rh_in) || isnan(rh_couldbe)) {
                 ESP_LOGD("schuur", "Input(s) NaN, skipping fan control");
                 return;
@@ -281,9 +281,13 @@ sensor:
     - median:
         window_size: $averaging
         send_every: $averaging
+
+# Two options dependent on your fan's output:
+
+# Option 1: Enable this part if your fan has an RPM output
 #  - platform: pulse_counter
 #    pin: 
-#      number: $fan_rpm_pin
+#      number: $fan_sense_pin
 #      mode: INPUT_PULLUP
 #    id: fan_rpm
 #    icon: "mdi:fan"
@@ -291,18 +295,20 @@ sensor:
 #    update_interval: $interval
 #    unit_of_measurement: "rpm"
 #    filters:
-#    - lambda: !lambda return x * 1.0/(float)$fan_rpm_divider;
+#    - lambda: !lambda return x * 1.0/(double)($fan_rpm_divider);
 #    - median:
 #        window_size: $averaging
 #        send_every: $averaging
 
+# Option 2: Enable this part if your fan has a 'locked rotor' output that is high when the fan rotor is stuck (e.g. failed bearing)
 binary_sensor:
   - platform: gpio
     pin: 
-      number: $fan_rpm_pin
-      inverted: true
-    id: fan_stall
+      number: $fan_sense_pin
+    id: fan_locked_rotor
     icon: "mdi:fan"
-    name: "Schuur fan stall state"
+    name: "Schuur fan locked rotor alarm"
     filters:
     - delayed_on_off: 1s
+    - lambda: !lambda |-
+        return id(the_fan).state && x;
