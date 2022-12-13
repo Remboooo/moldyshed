@@ -1,4 +1,3 @@
-from esphome import pins
 import esphome.config_validation as cv
 import esphome.codegen as cg
 from esphome.const import CONF_ID, CONF_OUTPUT
@@ -6,7 +5,7 @@ from esphome.core import coroutine_with_priority
 from esphome.components import output
 
 status_led_ns = cg.esphome_ns.namespace("better_status_led")
-BetterStatusLED = status_led_ns.class_("BetterStatusLED", cg.Component)
+BetterStatusLED = status_led_ns.class_("BetterStatusLED", output.BinaryOutput, cg.Component)
 
 CONFIG_SCHEMA = cv.Schema(
     {

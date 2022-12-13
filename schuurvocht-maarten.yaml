@@ -29,6 +29,7 @@ substitutions:
   led_status_pin: D4
 
 better_status_led:
+  id: status_led
   output: status_led_pwm
 
 switch:
@@ -42,12 +43,12 @@ switch:
       then:
       - lambda: |-
           ESP_LOGI("schuur", "enable auto fan control");
-      #- output.turn_on: led_auto
+      - output.turn_on: status_led
     on_turn_off:
       then:
       - lambda: |-
           ESP_LOGI("schuur", "disable auto fan control");
-      #- output.turn_off: led_auto
+      - output.turn_off: status_led
 
 number:
   - platform: template

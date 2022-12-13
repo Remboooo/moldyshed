@@ -13,13 +13,13 @@ BetterStatusLED::BetterStatusLED() { global_better_status_led = this; }
 
 void BetterStatusLED::loop() {
   if ((App.get_app_state() & STATUS_LED_ERROR) != 0u) {
-    //this->pin_->digital_write(millis() % 250u < 150u);
     this->output_->set_level(millis() % 250u < 150u ? 1.0f : 0.0f);
   } else if ((App.get_app_state() & STATUS_LED_WARNING) != 0u) {
-    //this->pin_->digital_write(millis() % 1500u < 250u);
     this->output_->set_level(millis() % 1500u < 250u ? 1.0f : 0.0f);
-  } else {
+  } else if (this->state_) {
     this->output_->set_level(0.05f);
+  } else {
+    this->output_->set_level(0.0f);
   }
 }
 float BetterStatusLED::get_setup_priority() const { return setup_priority::HARDWARE; }
