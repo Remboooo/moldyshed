@@ -1,0 +1,241 @@
+esphome:
+  name: schuurvocht69
+
+esp8266:
+  board: d1_mini
+  restore_from_flash: true
+
+logger:
+  level: debug
+
+captive_portal:
+web_server:
+  auth:
+    username: maert
+    password: lekker schuren
+  version: 1
+
+<<: !include secrets-maarten.yaml
+
+substitutions:
+  interval: "3s"  # the AM2302 will work with smaller intervals, but at <2s it will start to heat up and skew the results!
+  averaging: "4"  # HASS output and outside measurement smoothing: averages over n samples and computes/sends every n samples
+  sensor_pin_outside: D5
+  sensor_pin_inside: D6
+  fan_enable_pin: D2
+  led_status_pin: D4
+
+
+status_led:
+  pin: 
+    number: $led_status_pin
+    inverted: true
+
+
+switch:
+  - platform: template
+    name: "Fan control enable"
+    id: enable_auto
+    icon: mdi:fan-auto
+    optimistic: true
+    restore_state: true
+    on_turn_on:
+      then:
+      - lambda: |-
+          ESP_LOGI("schuur", "enable auto fan control");
+      #- output.turn_on: led_auto
+    on_turn_off:
+      then:
+      - lambda: |-
+          ESP_LOGI("schuur", "disable auto fan control");
+      #- output.turn_off: led_auto
+
+number:
+  - platform: template
+    name: "RH diff to switch off"
+    id: fan_rh_diff_off
+    entity_category: config
+    icon: mdi:fan-chevron-down
+    optimistic: true
+    min_value: -25
+    max_value: 25
+    restore_value: true
+    initial_value: -1
+    step: 1
+  - platform: template
+    name: "RH diff to switch on"
+    id: fan_rh_diff_on
+    entity_category: config
+    icon: mdi:fan-chevron-up
+    optimistic: true
+    min_value: -25
+    max_value: 25
+    restore_value: true
+    initial_value: 2
+    step: 1
+  - platform: template
+    name: "RH setpoint"
+    id: rh_setpoint
+    entity_category: config
+    icon: mdi:water-check
+    optimistic: true
+    min_value: 0
+    max_value: 100
+    restore_value: true
+    initial_value: 40
+    step: 1
+
+fan:
+  - platform: binary
+    output: fan_enable
+    name: "Schuur fan"
+    id: the_fan
+
+output:
+  - platform: gpio
+    pin: 
+      number: $fan_enable_pin
+    id: fan_enable
+
+globals:
+  - id: raw_in_t
+    type: double
+  - id: raw_in_rh
+    type: double
+  - id: raw_out_t
+    type: double
+  - id: raw_out_rh
+    type: double
+
+sensor:
+  - platform: wifi_signal
+    name: "Schuur WiFi RSSI"
+    id: wifi_rssi
+    update_interval: 10s
+  - platform: dht
+    pin: 
+      number: $sensor_pin_outside
+      mode: INPUT_PULLUP
+    model: AM2302
+    temperature:
+      name: "Temp buiten"
+      id: out_t
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value:
+        then:
+        - lambda: id(raw_out_t) = x;
+    humidity:
+      name: "RH buiten"
+      id: out_rh
+      accuracy_decimals: 1
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value:
+        then:
+        - lambda: id(raw_out_rh) = x;
+    update_interval: $interval
+  - platform: dht
+    pin: 
+      number: $sensor_pin_inside
+      mode: INPUT_PULLUP
+    model: AM2302
+    temperature:
+      name: "Temp schuur"
+      id: in_t
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value:
+        then:
+        - lambda: id(raw_in_t) = x;
+    humidity:
+      name: "RH schuur"
+      id: in_rh
+      accuracy_decimals: 1
+      filters:
+      - median:
+          window_size: $averaging
+          send_every: $averaging
+      on_raw_value: 
+        then:
+        - lambda: id(raw_in_rh) = x;
+        - lambda: |-
+            auto t_i = id(raw_in_t);
+            auto rh_i = id(raw_in_rh);
+            auto m_i = 6.112 * exp((17.67*t_i)/(t_i+243.5))*rh_i*18.02 / ((273.15+t_i) * 100 * 0.08314);
+            
+            auto t_o = id(raw_out_t);
+            auto rh_o = id(raw_out_rh);
+            auto m_o = 6.112 * exp((17.67*t_o)/(t_o+243.5))*rh_o*18.02 / ((273.15+t_o) * 100 * 0.08314);
+            
+            auto rh_o_t_i = (m_o / ((t_i+273.15)/(t_o+273.15))) * exp(-(17.67*t_i)/(t_i+243.5))*(0.075487*t_i+20.6193);
+           
+            id(in_m).publish_state(m_i);
+            id(out_m).publish_state(m_o);
+            id(out_rh_at_in_t).publish_state(rh_o_t_i);
+    update_interval: $interval
+  - platform: template
+    name: "Vochtgehalte schuur"
+    icon: mdi:water
+    id: in_m
+    unit_of_measurement: "g/m³"
+    accuracy_decimals: 2
+    filters:
+    - median:
+        window_size: $averaging
+        send_every: $averaging
+  - platform: template
+    name: "Vochtgehalte buiten"
+    icon: mdi:water
+    id: out_m
+    unit_of_measurement: "g/m³"
+    accuracy_decimals: 2
+    filters:
+    - median:
+        window_size: $averaging
+        send_every: $averaging
+  - platform: template
+    name: "RH buiten bij schuurtemperatuur"
+    icon: mdi:water-percent
+    id: out_rh_at_in_t
+    unit_of_measurement: "%"
+    filters:
+    - median:
+        window_size: $averaging
+        send_every: $averaging
+    on_value:
+      if:
+        condition:
+          switch.is_on: enable_auto
+        then:
+        - lambda: |-
+            auto rh_in = id(raw_in_rh);
+            auto rh_couldbe = x;
+            if (isnan(rh_in) || isnan(rh_couldbe)) {
+                ESP_LOGD("schuur", "Input(s) NaN, skipping fan control");
+                return;
+            }
+            
+            bool fan_currently_on = id(the_fan).state;
+            bool fan_should_be = fan_currently_on;
+
+            double rh_diff = rh_in - max(rh_couldbe, id(rh_setpoint).state);
+            if (fan_currently_on && rh_diff < id(fan_rh_diff_off).state) {
+              fan_should_be = false;
+            }
+            else if (!fan_currently_on && rh_diff > id(fan_rh_diff_on).state) {
+              fan_should_be = true;
+            }
+
+            ESP_LOGD("schuur", "RH diff %+.1f%%, fan %d -> %d", rh_diff, fan_currently_on, fan_should_be);
+            
+            if (fan_currently_on != fan_should_be) {
+              auto call = fan_should_be ? id(the_fan).turn_on() : id(the_fan).turn_off();
+              call.perform();
+            }
