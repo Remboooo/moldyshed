@@ -15,6 +15,9 @@ web_server:
     password: lekker schuren
   version: 1
 
+external_components:
+  - source: custom_components
+
 <<: !include secrets-maarten.yaml
 
 substitutions:
@@ -25,12 +28,8 @@ substitutions:
   fan_enable_pin: D2
   led_status_pin: D4
 
-
-status_led:
-  pin: 
-    number: $led_status_pin
-    inverted: true
-
+better_status_led:
+  output: status_led_pwm
 
 switch:
   - platform: template
@@ -96,6 +95,11 @@ output:
     pin: 
       number: $fan_enable_pin
     id: fan_enable
+  - platform: esp8266_pwm
+    id: status_led_pwm
+    pin: 
+      number: $led_status_pin
+      inverted: true
 
 globals:
   - id: raw_in_t
