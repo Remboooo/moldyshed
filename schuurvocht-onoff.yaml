@@ -9,16 +9,11 @@ logger:
   level: debug
 
 captive_portal:
-web_server:
-  auth:
-    username: maert
-    password: lekker schuren
-  version: 1
 
 external_components:
   - source: custom_components
 
-<<: !include secrets-maarten.yaml
+<<: !include secrets.yaml
 
 substitutions:
   interval: "3s"  # the AM2302 will work with smaller intervals, but at <2s it will start to heat up and skew the results!
