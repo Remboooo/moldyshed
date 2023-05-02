@@ -96,6 +96,17 @@ number:
     initial_value: 30
     step: 1
   - platform: template
+    name: "RH diff for min speed"
+    id: fan_min_rh_diff
+    entity_category: config
+    icon: mdi:fan-chevron-down
+    optimistic: true
+    min_value: 0
+    max_value: 100
+    restore_value: true
+    initial_value: 2
+    step: 1
+  - platform: template
     name: "RH setpoint"
     id: rh_setpoint
     entity_category: config
@@ -271,7 +282,8 @@ sensor:
             int min_speed = id(fan_auto_min).state;
             int max_speed = id(fan_auto_max).state;
             double rh_percent_for_max_speed = (double) id(fan_rh_speed_factor).state;
-            double speed_frac = (rh_in - rh_couldbe) / rh_percent_for_max_speed;
+            double rh_percent_for_min_speed = (double) id(fan_min_rh_diff).state;
+            double speed_frac = ((rh_in - rh_couldbe) - rh_percent_for_min_speed) / (rh_percent_for_max_speed - rh_percent_for_min_speed);
             int desired_speed = round(min_speed + (max_speed - min_speed) * speed_frac);
             if (desired_speed < min_speed) {
                 if (fan_always_on) {
