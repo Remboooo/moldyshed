@@ -5,6 +5,9 @@ esp8266:
   board: d1_mini
   restore_from_flash: true
 
+preferences:
+  flash_write_interval: 3600s
+
 logger:
   level: debug
 
@@ -79,6 +82,28 @@ number:
     restore_value: true
     initial_value: 40
     step: 1
+  - platform: template
+    name: "Temp buiten correctie"
+    id: out_t_correction
+    entity_category: config
+    icon: mdi:thermometer-plus
+    optimistic: true
+    min_value: -10
+    max_value: 10
+    restore_value: true
+    initial_value: 0
+    step: .1
+  - platform: template
+    name: "Temp binnen correctie"
+    id: in_t_correction
+    entity_category: config
+    icon: mdi:thermometer-plus
+    optimistic: true
+    min_value: -10
+    max_value: 10
+    restore_value: true
+    initial_value: 0
+    step: .1
 
 fan:
   - platform: binary
@@ -124,9 +149,10 @@ sensor:
       - median:
           window_size: $averaging
           send_every: $averaging
+      - lambda: return x + (float)id(out_t_correction).state;
       on_raw_value:
         then:
-        - lambda: id(raw_out_t) = x;
+        - lambda: id(raw_out_t) = x + (float)id(out_t_correction).state;
     humidity:
       name: "RH buiten"
       id: out_rh
@@ -151,9 +177,10 @@ sensor:
       - median:
           window_size: $averaging
           send_every: $averaging
+      - lambda: return x + (float)id(in_t_correction).state;
       on_raw_value:
         then:
-        - lambda: id(raw_in_t) = x;
+        - lambda: id(raw_in_t) = x + (float)id(in_t_correction).state;
     humidity:
       name: "RH schuur"
       id: in_rh

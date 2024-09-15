@@ -12,6 +12,9 @@ esp8266:
   board: d1_mini
   restore_from_flash: true
 
+preferences:
+  flash_write_interval: 3600s
+
 logger:
   level: debug
 
@@ -22,6 +25,7 @@ captive_portal:
 substitutions:
   interval: "4s"  # the AM2302 will work with smaller intervals, but at <2s it will start to heat up and skew the results!
   averaging: "4"  # HASS output and outside measurement smoothing: averages over n samples and computes/sends every n samples
+  smoothing: "150"  # fan speed will smoothed using a moving window average over this number × $interval
   sensor_pin_outside: D7
   sensor_pin_inside: D6
   fan_pwm_pin: D2
@@ -43,7 +47,7 @@ switch:
     id: enable_auto
     icon: mdi:fan-auto
     optimistic: true
-    restore_state: true
+    restore_mode: RESTORE_DEFAULT_ON
     on_turn_on:
       then:
       - lambda: |-
@@ -59,7 +63,7 @@ switch:
     id: fan_on_at_min
     icon: mdi:fan-remove
     optimistic: true
-    restore_state: true
+    restore_mode: RESTORE_DEFAULT_OFF
 
 number:
   - platform: template
@@ -117,6 +121,28 @@ number:
     restore_value: true
     initial_value: 40
     step: 1
+  - platform: template
+    name: "Temp buiten correctie"
+    id: out_t_correction
+    entity_category: config
+    icon: mdi:thermometer-plus
+    optimistic: true
+    min_value: -10
+    max_value: 10
+    restore_value: true
+    initial_value: 0
+    step: .1
+  - platform: template
+    name: "Temp binnen correctie"
+    id: in_t_correction
+    entity_category: config
+    icon: mdi:thermometer-plus
+    optimistic: true
+    min_value: -10
+    max_value: 10
+    restore_value: true
+    initial_value: 0
+    step: .1
 
 fan:
   - platform: speed
@@ -167,6 +193,8 @@ globals:
     type: double
   - id: raw_out_rh
     type: double
+  - id: instant_desired_fan_speed
+    type: double
 
 sensor:
   - platform: wifi_signal
@@ -183,9 +211,10 @@ sensor:
       - median:
           window_size: $averaging
           send_every: $averaging
+      - lambda: return x + (float)id(out_t_correction).state;
       on_raw_value:
         then:
-        - lambda: id(raw_out_t) = x;
+        - lambda: id(raw_out_t) = x + (float)id(out_t_correction).state;
     humidity:
       name: "RH buiten"
       id: out_rh
@@ -208,9 +237,10 @@ sensor:
       - median:
           window_size: $averaging
           send_every: $averaging
+      - lambda: return x + (float)id(in_t_correction).state;
       on_raw_value:
         then:
-        - lambda: id(raw_in_t) = x;
+        - lambda: id(raw_in_t) = x + (float)id(in_t_correction).state;
     humidity:
       name: "RH schuur"
       id: in_rh
@@ -294,9 +324,21 @@ sensor:
             }
             desired_speed = min(max_speed, desired_speed);
             ESP_LOGD("schuur", "Auto fan speed to %d%%", desired_speed);
-            auto call = (desired_speed > 0) ? id(the_fan).turn_on() : id(the_fan).turn_off();
-            call.set_speed(desired_speed);
-            call.perform();
+            id(instant_desired_fan_speed) = desired_speed;
+  - platform: template
+    id: smoothed_desired_fan_speed
+    internal: true
+    update_interval: $interval
+    lambda: return id(instant_desired_fan_speed);
+    filters:
+      - sliding_window_moving_average:
+          window_size: $smoothing
+          send_every: 1
+    on_value:
+      lambda: |-
+        auto call = (x > 0) ? id(the_fan).turn_on() : id(the_fan).turn_off();
+        call.set_speed(x);
+        call.perform();
   - platform: template
     id: fan_pwm_percent
     icon: "mdi:fan"
